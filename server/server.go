@@ -9,16 +9,24 @@ import (
 	"strings"
 )
 
-func slice(data []byte, s, e int) []byte {
+func slice(data []byte, s, e int) ([]byte, int, int) {
     if s < 0 {
         s = 0
+    }
+
+    if s > len(data) {
+        s = len(data)
     }
 
     if e > len(data) {
         e = len(data)
     }
 
-    return data[s:e]
+    if e < 0 {
+        e = 0
+    }
+
+    return data[s:e], s, e
 }
 
 func main() {
@@ -28,6 +36,7 @@ func main() {
 
     network := os.Args[1]
     file_name := os.Args[2]
+    client_table := make(map[int]int)
 
     file_data, err := os.ReadFile(file_name)
     if err != nil {
@@ -36,7 +45,7 @@ func main() {
     }
 
     id := 0
-    buflen := 16384
+    buflen := 8192
     addr, err := net.ResolveUDPAddr("udp", network)
     if err != nil {
         fmt.Println("Ошибка", err)
@@ -49,19 +58,20 @@ func main() {
         return
     }
 
+    fmt.Println("Сервер включён и ожидает подключение по порту", strings.Split(network, ":")[1])
+
     for {
         buffer := make([]byte, 65536)
-        bytesread, addr, _ := conn.ReadFromUDP(buffer)
+        _, addr, _ := conn.ReadFromUDP(buffer)
         request := strings.TrimSpace(string(buffer))
-        fmt.Println(request)
 
         var cid, cn int
         if n, _ := fmt.Sscanf(request, "%d %d", &cid, &cn); n != 2 {
-            fmt.Println(string(buffer[:bytesread]))
             _, err := conn.WriteToUDP([]byte(fmt.Sprint(id)), addr)
             if err != nil {
                 fmt.Println("Ошибка", err)
             }
+            client_table[id] = 0
             id += 1
         } else if buflen * cn >= len(file_data) {
             _, err := conn.WriteToUDP([]byte{0, 0, 0, 0}, addr)
@@ -69,13 +79,17 @@ func main() {
                 fmt.Println("Ошибка", err)
             }
         } else {
-            fmt.Println("Отправлено клиенту", cid)
-            data := slice(file_data, buflen * cn, buflen * (cn + 1))
-            fmt.Println(len(data), buflen * cn, buflen * (cn + 1))
+            if cn == 1 {
+                client_table[cid] += 1
+            }
+
+            data, s, e := slice(file_data, buflen * client_table[cid], buflen * (client_table[cid] + 1))
             buf := bytes.NewBuffer([]byte{})
             binary.Write(buf, binary.LittleEndian, []uint32{uint32(len(data))})
             buf.Write(data)
-            fmt.Println(buf.Bytes()[:16], len(data))
+            
+            fmt.Println("Отправлено клиенту", cid, s, "-", e)
+
             _, err := conn.WriteToUDP(buf.Bytes(), addr)
             if err != nil {
                 fmt.Println("Ошибка", err)

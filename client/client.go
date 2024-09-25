@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
 )
 
 func main() {
@@ -22,7 +21,6 @@ func main() {
 		return
 	}
 
-	part := 0
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		fmt.Println("Ошибка", err)
@@ -38,7 +36,7 @@ func main() {
 	}
 
 	var id int
-	var file_data bytes.Buffer
+	var part int
 	for {
 		buffer := make([]byte, 65536)
 		bytesread, err := conn.Read(buffer)
@@ -53,13 +51,20 @@ func main() {
 		var data uint32
 		if n, _ := fmt.Sscan(string(buffer[:bytesread]), &id); n != 1 {
 			binary.Read(buf, binary.LittleEndian, &data)
-
 			if data == 0 {
-				os.WriteFile("file.txt", file_data.Bytes(), 0644)
 				return
 			}
-			file_data.Write(buffer[4:bytesread])
-			part += 1
+			f, _ := os.OpenFile("file.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			f.Write(buffer[4:bytesread])
+			f.Close()
+		}
+		if n, _ := fmt.Scan(&part); n == 0 {
+			return
+		}
+		for part != 0 && part != 1 {
+			if n, _ := fmt.Scan(&part); n == 0 {
+				return
+			}
 		}
 
 		_, err = conn.Write([]byte(fmt.Sprint(id, part)))
@@ -67,6 +72,5 @@ func main() {
 			fmt.Println("Ошибка", err)
 			return
 		}
-		time.Sleep(time.Second)
 	}
 }
