@@ -16,12 +16,13 @@ func main() {
 		return
 	} else if len(os.Args) == 2 {
 		fileName = "file.txt"
+	} else {
+		fileName = os.Args[2]
 	}
 
-	address := os.Args[1]
-	fileName = os.Args[2]
+	addr_port := os.Args[1]
 
-	addr, err := net.ResolveUDPAddr("udp", address)
+	addr, err := net.ResolveUDPAddr("udp", addr_port)
 	if err != nil {
 		fmt.Println("Ошибка", err)
 		return
@@ -33,7 +34,7 @@ func main() {
 		return
 	}
 
-	fmt.Println("Подключён к", address)
+	fmt.Println("Подключён к", addr_port)
 
 	_, err = conn.Write([]byte("Greetings"))
 	if err != nil {
@@ -41,7 +42,7 @@ func main() {
 		return
 	}
 
-	var id int
+	var id string
 	var part int
 	var fileData bytes.Buffer
 	conn.SetReadDeadline(time.Now().Add(time.Second * 10))
@@ -53,13 +54,12 @@ func main() {
 			return
 		}
 
-		buf := bytes.NewBuffer(buffer[:4])
-		fmt.Println("От сервера", address, "получено", bytesRead, "байт")
-
 		var bytesLength uint32
-		if n, _ := fmt.Sscan(string(buffer[:bytesRead]), &id); n != 1 {
-			binary.Read(buf, binary.LittleEndian, &bytesLength)
+		buf := bytes.NewBuffer(buffer[:4])
+		err = binary.Read(buf, binary.LittleEndian, &bytesLength)
+		fmt.Println("От сервера", addr_port, "получено", bytesRead, "байт")
 
+		if err == nil && bytesRead-4 == int(bytesLength) {
 			if bytesLength == 0 {
 				os.WriteFile(fileName, fileData.Bytes(), 0644)
 				return
@@ -67,9 +67,11 @@ func main() {
 
 			fileData.Write(buffer[4:bytesRead])
 			part += 1
+		} else {
+			id = string(buffer[:bytesRead])
 		}
 
-		_, err = conn.Write([]byte(fmt.Sprint(id, part)))
+		_, err = conn.Write([]byte(fmt.Sprint(id, " ", part)))
 		if err != nil {
 			fmt.Println("Ошибка", err)
 			return
