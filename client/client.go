@@ -6,16 +6,22 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: ", os.Args[0], "<ip:port>")
+	fileName := ""
+	if len(os.Args) < 2 {
+		fmt.Println("Предоставьте ip:порт и имя файла в формате <программа ip-адрес:порт имя_файла>")
 		return
+	} else if len(os.Args) == 2 {
+		fileName = "file.txt"
 	}
 
-	network := os.Args[1]
-	addr, err := net.ResolveUDPAddr("udp", network)
+	address := os.Args[1]
+	fileName = os.Args[2]
+
+	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		fmt.Println("Ошибка", err)
 		return
@@ -27,7 +33,7 @@ func main() {
 		return
 	}
 
-	fmt.Println("Connected to", network)
+	fmt.Println("Подключён к", address)
 
 	_, err = conn.Write([]byte("Greetings"))
 	if err != nil {
@@ -37,34 +43,30 @@ func main() {
 
 	var id int
 	var part int
+	var fileData bytes.Buffer
+	conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 	for {
 		buffer := make([]byte, 65536)
-		bytesread, err := conn.Read(buffer)
+		bytesRead, err := conn.Read(buffer)
 		if err != nil {
 			fmt.Println("Ошибка", err)
 			return
 		}
 
 		buf := bytes.NewBuffer(buffer[:4])
-		fmt.Println(buf.Bytes())
+		fmt.Println("От сервера", address, "получено", bytesRead, "байт")
 
-		var data uint32
-		if n, _ := fmt.Sscan(string(buffer[:bytesread]), &id); n != 1 {
-			binary.Read(buf, binary.LittleEndian, &data)
-			if data == 0 {
+		var bytesLength uint32
+		if n, _ := fmt.Sscan(string(buffer[:bytesRead]), &id); n != 1 {
+			binary.Read(buf, binary.LittleEndian, &bytesLength)
+
+			if bytesLength == 0 {
+				os.WriteFile(fileName, fileData.Bytes(), 0644)
 				return
 			}
-			f, _ := os.OpenFile("file.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			f.Write(buffer[4:bytesread])
-			f.Close()
-		}
-		if n, _ := fmt.Scan(&part); n == 0 {
-			return
-		}
-		for part != 0 && part != 1 {
-			if n, _ := fmt.Scan(&part); n == 0 {
-				return
-			}
+
+			fileData.Write(buffer[4:bytesRead])
+			part += 1
 		}
 
 		_, err = conn.Write([]byte(fmt.Sprint(id, part)))
