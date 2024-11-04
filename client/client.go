@@ -1,80 +1,34 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
-	"time"
 )
 
 func main() {
-	fileName := ""
-	if len(os.Args) < 2 {
-		fmt.Println("Предоставьте ip:порт и имя файла в формате <программа ip-адрес:порт имя_файла>")
-		return
-	} else if len(os.Args) == 2 {
-		fileName = "file.txt"
-	} else {
-		fileName = os.Args[2]
-	}
+    if len(os.Args) < 4 {
+        panic("Предоставьте адрес, порт и комманду <программа ip-адрес порт get | inc>")
+    }
 
-	addr_port := os.Args[1]
+    address := os.Args[1]
+    port := os.Args[2]
+    command := os.Args[3]
 
-	addr, err := net.ResolveUDPAddr("udp", addr_port)
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    addr, err := net.ResolveUDPAddr("udp", fmt.Sprint(address, ":", port))
+    if err != nil { panic(err) }
 
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    conn, err := net.DialUDP("udp", nil, addr)
+    if err != nil { panic(err) }
 
-	fmt.Println("Подключён к", addr_port)
+    if len([]byte(command)) > 1000 { command = command[:1000] }
 
-	_, err = conn.Write([]byte("Greetings"))
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    _, err = conn.Write([]byte(command))
+    if err != nil { panic(err) }
 
-	var id string
-	var part int
-	var fileData bytes.Buffer
-	conn.SetReadDeadline(time.Now().Add(time.Second * 10))
-	for {
-		buffer := make([]byte, 65536)
-		bytesRead, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Ошибка", err)
-			return
-		}
+    buffer := make([]byte, 65536)
+    n, err := conn.Read(buffer)
+    if err != nil { panic(err) }
 
-		var bytesLength uint32
-		buf := bytes.NewBuffer(buffer[:4])
-		err = binary.Read(buf, binary.LittleEndian, &bytesLength)
-		fmt.Println("От сервера", addr_port, "получено", bytesRead, "байт")
-
-		if err == nil && bytesRead-4 == int(bytesLength) {
-			if bytesLength == 0 {
-				os.WriteFile(fileName, fileData.Bytes(), 0644)
-				return
-			}
-
-			fileData.Write(buffer[4:bytesRead])
-			part += 1
-		} else {
-			id = string(buffer[:bytesRead])
-		}
-
-		_, err = conn.Write([]byte(fmt.Sprint(id, " ", part)))
-		if err != nil {
-			fmt.Println("Ошибка", err)
-			return
-		}
-	}
+    fmt.Println(string(buffer[:n]))
 }

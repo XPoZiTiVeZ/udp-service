@@ -1,90 +1,117 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
+	"database/sql"
 	"fmt"
 	"net"
 	"os"
-	"strings"
+	"sync"
+
+	_ "modernc.org/sqlite"
 )
 
-func slice(data []byte, s, e int) []byte {
-	if s < 0 {
-		s = 0
-	}
+var mx sync.Mutex
 
-	if e > len(data) {
-		e = len(data)
-	}
-
-	return data[s:e]
+type Request struct {
+    method string
+    addr   *net.UDPAddr
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Предоставьте порт и имя файла в формате <программа порт имя_файла>")
-	}
+    if len(os.Args) < 3 {
+        panic("Предоставьте порт и имя файла в формате <программа порт имя_файла>")
+    }
 
-	port := os.Args[1]
-	fileName := os.Args[2]
+    port := os.Args[1]
+    fileName := os.Args[2]
 
-	fileData, err := os.ReadFile(fileName)
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    db, err := sql.Open("sqlite", fileName)
+    if err != nil { panic(err) }
 
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprint("0.0.0.0:", port))
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    defer db.Close()
 
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		fmt.Println("Ошибка", err)
-		return
-	}
+    _, err = db.Exec(`CREATE TABLE IF NOT EXISTS counter(id INT PRIMARY KEY, value INT)`)
+    if err != nil { panic(err) }
 
-	id := 0
-	ids := map[string]int{}
-	bytesLength := 32768
-	for {
-		buffer := make([]byte, 65536)
-		bytesRead, addr, _ := conn.ReadFromUDP(buffer)
-		request := strings.TrimSpace(string(buffer[:bytesRead]))
+    rows, err := db.Query(`SELECT value FROM counter WHERE id = 1`)
+    if err != nil { panic(err) }
 
-		var cid string
-		var cn int
-		n, _ := fmt.Sscanf(request, "%s %d", &cid, &cn)
-		_, ok := ids[cid]
-		fmt.Println(cid, cn, ok, ids)
-		if n != 2 {
-			_, err := conn.WriteToUDP([]byte(fmt.Sprint(id)), addr)
-			if err != nil {
-				fmt.Println("Ошибка", err)
-			}
-			ids[fmt.Sprint(id)] = 0
-			id += 1
-		} else if bytesLength*cn >= len(fileData) || !ok {
-			_, err := conn.WriteToUDP([]byte{0, 0, 0, 0}, addr)
-			if err != nil {
-				fmt.Println("Ошибка", err)
-			}
-		} else {
-			data := slice(fileData, bytesLength*cn, bytesLength*(cn+1))
+    var value int = -1
+    rows.Next()
+    rows.Scan(&value)
+    rows.Close()
 
-			buf := bytes.NewBuffer([]byte{})
-			binary.Write(buf, binary.LittleEndian, []uint32{uint32(len(data))})
+    if value == -1 {
+        _, err = db.Exec(`INSERT INTO counter VALUES (1, 0)`)
+        if err != nil { panic(err) }
+    }
 
-			buf.Write(data)
-			fmt.Println(len(data), "байт отправлено клиенту", cid)
+    addr, err := net.ResolveUDPAddr("udp", fmt.Sprint("0.0.0.0:", port))
+    if err != nil { panic(err) }
 
-			_, err := conn.WriteToUDP(buf.Bytes(), addr)
-			if err != nil {
-				fmt.Println("Ошибка", err)
-			}
-		}
-	}
+    conn, err := net.ListenUDP("udp", addr)
+    if err != nil { panic(err) }
+
+    var query []Request
+    go func(){
+        for {
+        buffer := make([]byte, 65536)
+        n, addr, _ := conn.ReadFromUDP(buffer)
+
+        value := string(buffer[:n])
+    
+        if value == "get" || value == "inc" {
+            mx.Lock()
+            query = append(query, Request{value, addr})
+            mx.Unlock()
+        } else {
+            conn.WriteTo([]byte("error"), addr)
+        }
+        }
+    }()
+
+    for {
+        if len(query) == 0 {
+            continue
+        }
+
+        req := query[0]
+        
+        mx.Lock()
+        query = query[1:]
+        mx.Unlock()
+
+        if req.method == "get" {
+            rows, err := db.Query(`SElECT value FROM counter WHERE id = 1`)
+            if err != nil { panic(err) }
+
+            
+            var value int
+            if rows.Next() {
+                rows.Scan(&value)
+                rows.Close()
+            }
+
+            conn.WriteToUDP([]byte(fmt.Sprint(value)), req.addr)
+            continue
+        }
+        
+        if req.method == "inc" {
+            rows, err := db.Query(`SElECT value FROM counter WHERE id = 1`)
+            if err != nil { conn.WriteToUDP([]byte("fail"), req.addr) }
+
+            var value int
+            if rows.Next() {
+                rows.Scan(&value)
+                rows.Close()
+            }
+            if rows.Err() == sql.ErrNoRows { conn.WriteToUDP([]byte("fail"), req.addr)}
+
+            _, err = db.Exec(`UPDATE counter SET value = ? WHERE id = 1`, value + 1)
+            if err != nil { conn.WriteToUDP([]byte("fail"), req.addr) }
+
+            _, err = conn.WriteToUDP([]byte([]byte("ok")), req.addr)
+            if err != nil { panic(err) }
+        }
+    }
 }
